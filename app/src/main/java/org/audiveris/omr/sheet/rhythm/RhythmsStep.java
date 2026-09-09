@@ -81,6 +81,8 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+import org.audiveris.omr.sheet.reasoning.ReasoningAnalyzer;
+
 /**
  * Class <code>RhythmsStep</code> is a comprehensive step that handles the timing of every
  * relevant item within a page.
@@ -190,6 +192,9 @@ public class RhythmsStep
         // Process each page of the sheet
         for (Page page : sheet.getPages()) {
             new PageRhythm(page).process();
+
+            // Experimental read-only reasoning pass
+            new ReasoningAnalyzer(page).process();
         }
     }
 
