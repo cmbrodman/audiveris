@@ -12,27 +12,146 @@ import org.audiveris.omr.sheet.SystemInfo;
 import org.audiveris.omr.sheet.rhythm.MeasureStack;
 import org.audiveris.omr.sig.inter.AbstractChordInter;
 
+import org.audiveris.omr.sheet.rhythm.Measure;
+import org.audiveris.omr.sheet.rhythm.Voice;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Read-only experimental reasoning pass.
- * <p>
- * This class examines the result produced by the normal Audiveris rhythm
- * processing. It does not change any musical object.
- * </p>
+ * Experimental read-only musical reasoning pass.
+ *
+ * This class examines Audiveris recognition results after rhythm processing.
+ * It does not modify the score.
  */
 public class ReasoningAnalyzer
 {
-    private static final Logger logger = LoggerFactory.getLogger(ReasoningAnalyzer.class);
+    private static final Logger logger =
+            LoggerFactory.getLogger(ReasoningAnalyzer.class);
+
+    /**
+     * When true, ordinary interior measures that are shorter than the
+     * expected duration are reported just like overfull measures.
+     *
+     * Later this will become a user preference.
+     */
+    private static final boolean STRICT_UNDERFULL_CHECK = true;
 
     /** Page being analyzed. */
     private final Page page;
 
+    private static class TemporaryOverlapMatch
+    {
+        final Voice candidateVoice;
+        final AbstractChordInter candidateChord;
+        final Voice conflictingVoice;
+        final AbstractChordInter conflictingChord;
+        final int xDistance;
+
+        TemporaryOverlapMatch (Voice candidateVoice,
+                            AbstractChordInter candidateChord,
+                            Voice conflictingVoice,
+                            AbstractChordInter conflictingChord,
+                            int xDistance)
+        {
+            this.candidateVoice = candidateVoice;
+            this.candidateChord = candidateChord;
+            this.conflictingVoice = conflictingVoice;
+            this.conflictingChord = conflictingChord;
+            this.xDistance = xDistance;
+        }
+    }
+
+    private TemporaryOverlapMatch findTemporaryOverlappingVoice (Measure measure)
+    {
+        for (Voice candidate : measure.getVoices()) {
+
+            // Only examine short-lived voices.
+            if (candidate.getChords().size() > 2) {
+                continue;
+            }
+
+            final AbstractChordInter firstChord = candidate.getFirstChord();
+
+            if (firstChord == null) {
+                continue;
+            }
+
+            final Rational candidateStart = firstChord.getTimeOffset();
+
+            if (candidateStart == null) {
+                continue;
+            }
+
+            // Ignore voices that begin at the start of the measure.
+            if (candidateStart.compareTo(Rational.ZERO) <= 0) {
+                continue;
+            }
+
+            Voice conflictingVoice = null;
+            AbstractChordInter conflictingChord = null;
+            int bestXDistance = Integer.MAX_VALUE;
+
+            for (Voice other : measure.getVoices()) {
+
+                if (other == candidate) {
+                    continue;
+                }
+
+                final AbstractChordInter otherFirst = other.getFirstChord();
+
+                if (otherFirst == null) {
+                    continue;
+                }
+
+                final Rational otherStart = otherFirst.getTimeOffset();
+
+                if (otherStart == null) {
+                    continue;
+                }
+
+                // The other voice must already have started.
+                if (otherStart.compareTo(candidateStart) >= 0) {
+                    continue;
+                }
+
+                for (AbstractChordInter chord : other.getChords()) {
+
+                    final Rational chordStart = chord.getTimeOffset();
+
+                    if ((chordStart != null)
+                            && chordStart.equals(candidateStart)) {
+
+                        final int xDistance = Math.abs(
+                                chord.getCenter().x
+                                        - firstChord.getCenter().x);
+
+                        if (xDistance < bestXDistance) {
+                            bestXDistance = xDistance;
+                            conflictingVoice = other;
+                            conflictingChord = chord;
+                        }
+                    }
+                }
+            }
+
+            if (conflictingChord != null) {
+                return new TemporaryOverlapMatch(
+                        candidate,
+                        firstChord,
+                        conflictingVoice,
+                        conflictingChord,
+                        bestXDistance);
+            }
+        }
+
+        return null;
+    }
+
     /**
-     * Create a reasoning analyzer for one page.
+     * Create an analyzer for one page.
      *
-     * @param page the page to analyze
+     * @param page page to analyze
      */
     public ReasoningAnalyzer (Page page)
     {
@@ -49,12 +168,10 @@ public class ReasoningAnalyzer
         int issueCount = 0;
 
         for (SystemInfo system : page.getSystems()) {
-            logger.debug("Reasoning: examining system {}", system.getId());
 
             for (MeasureStack stack : system.getStacks()) {
-                if (analyzeStack(stack)) {
-                    issueCount++;
-                }
+
+                issueCount += analyzeStack(stack);
             }
         }
 
@@ -64,55 +181,717 @@ public class ReasoningAnalyzer
     }
 
     /**
-     * Analyze one vertical measure stack.
+     * Analyze one measure stack.
      *
      * @param stack measure stack
-     * @return true if a possible issue was found
+     * @return number of problems found
      */
-    private boolean analyzeStack (MeasureStack stack)
+    private int analyzeStack (MeasureStack stack)
     {
         final Rational expected = stack.getExpectedDuration();
-        final Rational excess = stack.getExcess();
 
-        // If Audiveris could not determine the expected duration,
-        // there is nothing useful for this first experiment to check.
         if (expected == null) {
-            return false;
+            return 0;
         }
 
-        // For version 1 we are interested only in measures that exceed
-        // their expected duration.
-        if (excess == null) {
-            return false;
+        int issues = 0;
+
+        // ------------------------------------------------------------
+        // Existing overfull detection
+        // ------------------------------------------------------------
+
+        final Rational excess = stack.getExcess();
+
+        if (excess != null) {
+
+            logger.warn(
+                    "REASONING: System {} Measure {} is OVERFULL"
+                            + " - expected:{} excess:{}",
+                    stack.getSystem().getId(),
+                    stack.getPageId(),
+                    expected,
+                    excess);
+
+            reportChords(stack);
+
+            issues++;
+        }
+
+            
+
+        // ------------------------------------------------------------
+        // New strict underfull detection
+        // ------------------------------------------------------------
+
+        if (STRICT_UNDERFULL_CHECK && isStrictInteriorMeasure(stack)) {
+
+            final Rational actual = stack.getActualDuration();
+
+            if ((actual != null) && (actual.compareTo(expected) < 0)) {
+
+                final Rational missing = expected.minus(actual);
+
+                logger.warn(
+                        "REASONING: System {} Measure {} is UNDERFULL"
+                                + " - expected:{} actual:{} missing:{}",
+                        stack.getSystem().getId(),
+                        stack.getPageId(),
+                        expected,
+                        actual,
+                        missing);
+
+                reportChords(stack);
+
+                issues++;
+            }
+        }
+        issues += compareMeasures(stack);
+        issues += detectTemporaryOverlappingVoices(stack);
+
+        // Experimental evidence scoring
+        reportEvidenceScores(stack);
+
+        return issues;
+    }
+
+            /**
+     * Compare all vertically aligned part-measures in one measure stack.
+     *
+     * This is diagnostic only. It does not modify the score.
+     *
+     * @param stack measure stack
+     * @return number of comparison anomalies found
+     */
+    private int compareMeasures (MeasureStack stack)
+    {
+        final Rational expected = stack.getExpectedDuration();
+
+        if (expected == null) {
+            return 0;
+        }
+
+        Rational referenceDuration = null;
+        Integer referenceVoiceCount = null;
+
+        boolean durationDisagreement = false;
+        boolean voiceCountDisagreement = false;
+
+        // First pass: determine whether the measures disagree.
+        for (Measure measure : stack.getMeasures()) {
+
+            final Rational duration = getMeasureDuration(measure);
+            final int voiceCount = measure.getVoices().size();
+
+            if (duration != null) {
+                if (referenceDuration == null) {
+                    referenceDuration = duration;
+                } else if (!duration.equals(referenceDuration)) {
+                    durationDisagreement = true;
+                }
+            }
+
+            if (referenceVoiceCount == null) {
+                referenceVoiceCount = voiceCount;
+            } else if (voiceCount != referenceVoiceCount) {
+                voiceCountDisagreement = true;
+            }
+        }
+
+        // Nothing interesting to report.
+        if (!durationDisagreement && !voiceCountDisagreement) {
+            return 0;
         }
 
         logger.warn(
-                "REASONING: System {} Measure {} is OVERFULL - expected:{} excess:{}",
+                "REASONING: System {} Measure {} has CROSS-PART DISAGREEMENT",
                 stack.getSystem().getId(),
-                stack.getPageId(),
-                expected,
-                excess);
+                stack.getPageId());
 
-        // Report the chords Audiveris placed in this measure stack.
+        int partIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            final Rational duration = getMeasureDuration(measure);
+            final int voiceCount = measure.getVoices().size();
+
+            String rhythmStatus = "UNKNOWN";
+
+            if (duration != null) {
+                final int cmp = duration.compareTo(expected);
+
+                if (cmp == 0) {
+                    rhythmStatus = "OK";
+                } else if (cmp < 0) {
+                    rhythmStatus = "UNDERFULL";
+                } else {
+                    rhythmStatus = "OVERFULL";
+                }
+            }
+
+            logger.warn(
+                    "    Part {} duration:{} voices:{} status:{}",
+                    partIndex,
+                    duration,
+                    voiceCount,
+                    rhythmStatus);
+
+            // Detailed voice timing for this suspicious measure
+            reportVoiceTiming(measure, partIndex);
+
+            partIndex++;
+        }
+
+        if (durationDisagreement) {
+            logger.warn(
+                    "    -> Duration disagreement between aligned measures");
+        }
+
+        if (voiceCountDisagreement) {
+            logger.warn(
+                    "    -> Voice-count disagreement between aligned measures");
+        }
+
+        return 1;
+    }
+
+    /**
+     * Look for short-lived voices that begin after the start of the measure
+     * and collide rhythmically with an already established voice.
+     *
+     * This is diagnostic only. It does not modify the score.
+     *
+     * @param stack measure stack
+     * @return number of suspicious temporary voices found
+     */
+    private int detectTemporaryOverlappingVoices (MeasureStack stack)
+    {
+        int issues = 0;
+        int partIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            for (Voice candidate : measure.getVoices()) {
+
+                // We're specifically looking for short temporary voices.
+                if (candidate.getChords().size() > 2) {
+                    continue;
+                }
+
+                final AbstractChordInter firstChord = candidate.getFirstChord();
+
+                if (firstChord == null) {
+                    continue;
+                }
+
+                final Rational candidateStart = firstChord.getTimeOffset();
+
+                // If timing could not be determined, another detector
+                // will eventually handle that case.
+                if (candidateStart == null) {
+                    continue;
+                }
+
+                // A normal voice beginning at the start of the measure
+                // is not what we're looking for here.
+                if (candidateStart.compareTo(Rational.ZERO) <= 0) {
+                    continue;
+                }
+
+                Voice conflictingVoice = null;
+                AbstractChordInter conflictingChord = null;
+                int bestXDistance = Integer.MAX_VALUE;
+
+                //
+                // Look for the established voice whose chord at the same onset
+                // is closest horizontally to the candidate chord.
+                //
+                for (Voice other : measure.getVoices()) {
+
+                    if (other == candidate) {
+                        continue;
+                    }
+
+                    final AbstractChordInter otherFirst = other.getFirstChord();
+
+                    if (otherFirst == null) {
+                        continue;
+                    }
+
+                    final Rational otherStart = otherFirst.getTimeOffset();
+
+                    if (otherStart == null) {
+                        continue;
+                    }
+
+                    // The other voice must already have been established.
+                    if (otherStart.compareTo(candidateStart) >= 0) {
+                        continue;
+                    }
+
+                    for (AbstractChordInter chord : other.getChords()) {
+
+                        final Rational chordStart = chord.getTimeOffset();
+
+                        if ((chordStart != null)
+                                && chordStart.equals(candidateStart)) {
+
+                            final int xDistance = Math.abs(
+                                    chord.getCenter().x - firstChord.getCenter().x);
+
+                            if (xDistance < bestXDistance) {
+                                bestXDistance = xDistance;
+                                conflictingVoice = other;
+                                conflictingChord = chord;
+                            }
+                        }
+                    }
+                }
+
+                if (conflictingVoice != null) {
+
+                    logger.warn(
+                            "REASONING: System {} Measure {} Part {}"
+                                    + " has TEMPORARY_OVERLAPPING_VOICE",
+                            stack.getSystem().getId(),
+                            stack.getPageId(),
+                            partIndex);
+
+                    logger.warn(
+                            "    suspicious Voice {} starts:{} chords:{}",
+                            candidate.getId(),
+                            candidateStart,
+                            candidate.getChords().size());
+
+                    logger.warn(
+                            "    overlaps established Voice {} at:{} x-distance:{}",
+                            conflictingVoice.getId(),
+                            candidateStart,
+                            bestXDistance);
+
+                    logger.warn(
+                            "    candidate first chord id:{} x:{} duration:{}",
+                            firstChord.getId(),
+                            firstChord.getCenter().x,
+                            firstChord.getDuration());
+                            
+                    logger.warn(
+                            "    conflicting chord id:{} x:{} duration:{}",
+                            conflictingChord.getId(),
+                            conflictingChord.getCenter().x,
+                            conflictingChord.getDuration());
+
+                    //
+                    // Print the complete suspicious voice so we can inspect it.
+                    //
+                    for (AbstractChordInter chord : candidate.getChords()) {
+
+                        Rational start = chord.getTimeOffset();
+                        Rational end = null;
+
+                        try {
+                            end = chord.getEndTime();
+                        } catch (Exception ex) {
+                            // Diagnostic only.
+                        }
+
+                        logger.warn(
+                                "        candidate chord id:{} x:{}"
+                                        + " start:{} duration:{} end:{}",
+                                chord.getId(),
+                                chord.getCenter().x,
+                                start,
+                                chord.getDuration(),
+                                end);
+                    }
+
+                    issues++;
+                }
+            }
+
+            partIndex++;
+        }
+
+        return issues;
+    }
+
+
+    /**
+     * Estimate the effective duration of one part-measure.
+     *
+     * For polyphonic music we do NOT add voice durations together.
+     * Instead, we use the latest valid voice ending time.
+     *
+     * @param measure individual part-measure
+     * @return effective duration, or null if it cannot be determined
+     */
+    private Rational getMeasureDuration (Measure measure)
+    {
+        Rational latest = null;
+
+        for (Voice voice : measure.getVoices()) {
+
+            // A measure rest represents the entire expected measure.
+            if (voice.isMeasureRest()) {
+                return measure.getStack().getExpectedDuration();
+            }
+
+            final Rational duration = voice.getDuration();
+
+            if (duration == null) {
+                continue;
+            }
+
+            if ((latest == null) || (duration.compareTo(latest) > 0)) {
+                latest = duration;
+            }
+        }
+
+        return latest;
+    }
+
+    /**
+     * Report detailed timing information for every voice in one part-measure.
+     *
+     * This is diagnostic only. Nothing in the score is modified.
+     *
+     * @param measure   individual part-measure
+     * @param partIndex displayed part number
+     */
+    private void reportVoiceTiming (Measure measure,
+                                    int partIndex)
+    {
+        for (Voice voice : measure.getVoices()) {
+
+            final Rational voiceDuration = voice.getDuration();
+            final Rational termination = voice.getTermination();
+
+            AbstractChordInter firstChord = voice.getFirstChord();
+            AbstractChordInter lastChord = voice.getLastChord();
+
+            Rational start = null;
+            Rational end = null;
+
+            if (firstChord != null) {
+                start = firstChord.getTimeOffset();
+            }
+
+            if (lastChord != null) {
+                try {
+                    end = lastChord.getEndTime();
+                } catch (Exception ex) {
+                    // Leave end as null if Audiveris could not calculate it.
+                }
+            }
+
+            logger.warn(
+                    "        Voice {} start:{} end:{} duration:{} termination:{} chords:{}",
+                    voice.getId(),
+                    start,
+                    end,
+                    voiceDuration,
+                    termination,
+                    voice.getChords().size());
+
+            // Print every chord belonging to this voice.
+            for (AbstractChordInter chord : voice.getChords()) {
+
+                Rational chordStart = chord.getTimeOffset();
+                Rational chordEnd = null;
+
+                try {
+                    chordEnd = chord.getEndTime();
+                } catch (Exception ex) {
+                    // Leave null if timing is unavailable.
+                }
+
+                logger.warn(
+                        "            chord id:{} x:{} start:{} duration:{} end:{}",
+                        chord.getId(),
+                        chord.getCenter().x,
+                        chordStart,
+                        chord.getDuration(),
+                        chordEnd);
+            }
+        }
+    }
+
+    /**
+     * Decide whether strict short-measure checking should apply.
+     *
+     * For now we exclude known Audiveris special-measure types.
+     *
+     * @param stack measure stack
+     * @return true if strict checking should apply
+     */
+    private boolean isStrictInteriorMeasure (MeasureStack stack)
+    {
+        // Known special measure types
+        if (stack.isImplicit()) {
+            return false;
+        }
+
+        if (stack.isCautionary()) {
+            return false;
+        }
+
+        if (stack.isFirstHalf()) {
+            return false;
+        }
+
+        if (stack.isMultiRest()) {
+            return false;
+        }
+
+        // For this first strict implementation, do not flag
+        // the first measure of the page as underfull.
+        if (stack.getPageId().equals("1")) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Report all standard chords in a measure stack.
+     */
+    private void reportChords (MeasureStack stack)
+    {
         for (AbstractChordInter chord : stack.getStandardChords()) {
+
             try {
-                final Rational duration = chord.isMeasureRest()
-                        ? expected
-                        : chord.getDuration();
+                final Rational duration =
+                        chord.isMeasureRest()
+                                ? stack.getExpectedDuration()
+                                : chord.getDuration();
 
                 logger.warn(
                         "    chord id:{} x:{} duration:{}",
                         chord.getId(),
                         chord.getCenter().x,
                         duration);
+
             } catch (Exception ex) {
+
                 logger.warn(
                         "    Could not examine chord {}",
                         chord,
                         ex);
             }
         }
+    }
 
-        return true;
+        /**
+     * Calculate and report a simple reasoning evidence score for each
+     * part-measure in the stack.
+     *
+     * This is diagnostic only. Nothing in the score is modified.
+     *
+     * @param stack measure stack
+     */
+    private void reportEvidenceScores (MeasureStack stack)
+    {
+        final Rational expected = stack.getExpectedDuration();
+
+        if (expected == null) {
+            return;
+        }
+
+        final boolean voiceCountDisagreement = hasVoiceCountDisagreement(stack);
+
+        int partIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            int score = 0;
+
+            boolean underfull = false;
+            boolean overfull = false;
+            boolean alignedPartIsCorrect = false;
+            boolean temporaryOverlap = false;
+            boolean unresolvedTiming = false;
+            boolean missingContent = false;
+
+            final Rational duration = getMeasureDuration(measure);
+
+            //
+            // Missing content
+            //
+            if (measure.getVoices().isEmpty()) {
+                missingContent = true;
+                score += 5;
+            }
+
+            //
+            // Duration evidence
+            //
+            if (duration != null) {
+
+                final int cmp = duration.compareTo(expected);
+
+                if (cmp < 0) {
+                    underfull = true;
+                    score += 4;
+                } else if (cmp > 0) {
+                    overfull = true;
+                    score += 4;
+                }
+            }
+
+            //
+            // Does another aligned part have the correct duration?
+            //
+            if (underfull || overfull || missingContent) {
+
+                for (Measure other : stack.getMeasures()) {
+
+                    if (other == measure) {
+                        continue;
+                    }
+
+                    final Rational otherDuration = getMeasureDuration(other);
+
+                    if ((otherDuration != null)
+                            && otherDuration.equals(expected)) {
+
+                        alignedPartIsCorrect = true;
+                        score += 3;
+                        break;
+                    }
+                }
+            }
+
+            //
+            // Temporary overlapping voice
+            //
+            temporaryOverlap = hasTemporaryOverlappingVoice(measure);
+
+            if (temporaryOverlap) {
+                score += 2;
+            }
+
+            //
+            // Voice-count disagreement
+            //
+            if (voiceCountDisagreement) {
+                score += 1;
+            }
+
+            //
+            // Chords for which Audiveris could not establish timing.
+            //
+            unresolvedTiming = hasUnresolvedChordTiming(measure);
+
+            if (unresolvedTiming) {
+                score += 5;
+            }
+
+            //
+            // Only print measures with some evidence.
+            //
+            if (score > 0) {
+
+                logger.warn(
+                        "REASONING SCORE: System {} Measure {} Part {}"
+                                + " score:{} severity:{}",
+                        stack.getSystem().getId(),
+                        stack.getPageId(),
+                        partIndex,
+                        score,
+                        getEvidenceSeverity(score));
+
+                if (underfull) {
+                    logger.warn("    +4 UNDERFULL_PART");
+                }
+
+                if (overfull) {
+                    logger.warn("    +4 OVERFULL_PART");
+                }
+
+                if (alignedPartIsCorrect) {
+                    logger.warn("    +3 ALIGNED_PART_HAS_CORRECT_DURATION");
+                }
+
+                if (temporaryOverlap) {
+                    logger.warn("    +2 TEMPORARY_OVERLAPPING_VOICE");
+                }
+
+                if (voiceCountDisagreement) {
+                    logger.warn("    +1 VOICE_COUNT_DISAGREEMENT");
+                }
+
+                if (unresolvedTiming) {
+                    logger.warn("    +5 UNRESOLVED_CHORD_TIMING");
+                }
+
+                if (missingContent) {
+                    logger.warn("    +5 MISSING_PART_CONTENT");
+                }
+            }
+
+            partIndex++;
+        }
+    }
+
+        /**
+     * Convert an evidence score into a simple severity category.
+     *
+     * @param score evidence score
+     * @return severity label
+     */
+    private String getEvidenceSeverity (int score)
+    {
+        if (score >= 8) {
+            return "STRONG";
+        }
+
+        if (score >= 5) {
+            return "SUSPICIOUS";
+        }
+
+        if (score >= 3) {
+            return "QUESTIONABLE";
+        }
+
+        return "INFORMATIONAL";
+    }
+
+        /**
+     * Check whether aligned part-measures have different numbers of voices.
+     *
+     * @param stack measure stack
+     * @return true if voice counts disagree
+     */
+    private boolean hasVoiceCountDisagreement (MeasureStack stack)
+    {
+        Integer referenceCount = null;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            final int count = measure.getVoices().size();
+
+            if (referenceCount == null) {
+                referenceCount = count;
+            } else if (count != referenceCount) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check whether this measure contains at least one short-lived voice
+     * that begins after the measure start and shares an onset with an
+     * already established voice.
+     *
+     * The matching chord is selected using horizontal proximity, just as
+     * in detectTemporaryOverlappingVoices().
+     *
+     * @param measure part-measure
+     * @return true if such a voice exists
+     */
+    private boolean hasTemporaryOverlappingVoice (Measure measure)
+    {
+        return findTemporaryOverlappingVoice(measure) != null;
     }
 }
