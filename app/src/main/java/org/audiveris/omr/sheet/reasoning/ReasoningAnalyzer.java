@@ -370,142 +370,76 @@ public class ReasoningAnalyzer
 
         for (Measure measure : stack.getMeasures()) {
 
-            for (Voice candidate : measure.getVoices()) {
+            final TemporaryOverlapMatch match =
+                    findTemporaryOverlappingVoice(measure);
 
-                // We're specifically looking for short temporary voices.
-                if (candidate.getChords().size() > 2) {
-                    continue;
-                }
+            if (match != null) {
 
-                final AbstractChordInter firstChord = candidate.getFirstChord();
+                final Voice candidate = match.candidateVoice;
+                final AbstractChordInter firstChord = match.candidateChord;
+                final Voice conflictingVoice = match.conflictingVoice;
+                final AbstractChordInter conflictingChord = match.conflictingChord;
+                final int bestXDistance = match.xDistance;
 
-                if (firstChord == null) {
-                    continue;
-                }
+                final Rational candidateStart =
+                        firstChord.getTimeOffset();
 
-                final Rational candidateStart = firstChord.getTimeOffset();
+                logger.warn(
+                        "REASONING: System {} Measure {} Part {}"
+                                + " has TEMPORARY_OVERLAPPING_VOICE",
+                        stack.getSystem().getId(),
+                        stack.getPageId(),
+                        partIndex);
 
-                // If timing could not be determined, another detector
-                // will eventually handle that case.
-                if (candidateStart == null) {
-                    continue;
-                }
+                logger.warn(
+                        "    suspicious Voice {} starts:{} chords:{}",
+                        candidate.getId(),
+                        candidateStart,
+                        candidate.getChords().size());
 
-                // A normal voice beginning at the start of the measure
-                // is not what we're looking for here.
-                if (candidateStart.compareTo(Rational.ZERO) <= 0) {
-                    continue;
-                }
+                logger.warn(
+                        "    overlaps established Voice {} at:{} x-distance:{}",
+                        conflictingVoice.getId(),
+                        candidateStart,
+                        bestXDistance);
 
-                Voice conflictingVoice = null;
-                AbstractChordInter conflictingChord = null;
-                int bestXDistance = Integer.MAX_VALUE;
+                logger.warn(
+                        "    candidate first chord id:{} x:{} duration:{}",
+                        firstChord.getId(),
+                        firstChord.getCenter().x,
+                        firstChord.getDuration());
+
+                logger.warn(
+                        "    conflicting chord id:{} x:{} duration:{}",
+                        conflictingChord.getId(),
+                        conflictingChord.getCenter().x,
+                        conflictingChord.getDuration());
 
                 //
-                // Look for the established voice whose chord at the same onset
-                // is closest horizontally to the candidate chord.
+                // Print the complete suspicious voice so we can inspect it.
                 //
-                for (Voice other : measure.getVoices()) {
+                for (AbstractChordInter chord : candidate.getChords()) {
 
-                    if (other == candidate) {
-                        continue;
+                    Rational start = chord.getTimeOffset();
+                    Rational end = null;
+
+                    try {
+                        end = chord.getEndTime();
+                    } catch (Exception ex) {
+                        // Diagnostic only.
                     }
 
-                    final AbstractChordInter otherFirst = other.getFirstChord();
-
-                    if (otherFirst == null) {
-                        continue;
-                    }
-
-                    final Rational otherStart = otherFirst.getTimeOffset();
-
-                    if (otherStart == null) {
-                        continue;
-                    }
-
-                    // The other voice must already have been established.
-                    if (otherStart.compareTo(candidateStart) >= 0) {
-                        continue;
-                    }
-
-                    for (AbstractChordInter chord : other.getChords()) {
-
-                        final Rational chordStart = chord.getTimeOffset();
-
-                        if ((chordStart != null)
-                                && chordStart.equals(candidateStart)) {
-
-                            final int xDistance = Math.abs(
-                                    chord.getCenter().x - firstChord.getCenter().x);
-
-                            if (xDistance < bestXDistance) {
-                                bestXDistance = xDistance;
-                                conflictingVoice = other;
-                                conflictingChord = chord;
-                            }
-                        }
-                    }
+                    logger.warn(
+                            "        candidate chord id:{} x:{}"
+                                    + " start:{} duration:{} end:{}",
+                            chord.getId(),
+                            chord.getCenter().x,
+                            start,
+                            chord.getDuration(),
+                            end);
                 }
 
-                if (conflictingVoice != null) {
-
-                    logger.warn(
-                            "REASONING: System {} Measure {} Part {}"
-                                    + " has TEMPORARY_OVERLAPPING_VOICE",
-                            stack.getSystem().getId(),
-                            stack.getPageId(),
-                            partIndex);
-
-                    logger.warn(
-                            "    suspicious Voice {} starts:{} chords:{}",
-                            candidate.getId(),
-                            candidateStart,
-                            candidate.getChords().size());
-
-                    logger.warn(
-                            "    overlaps established Voice {} at:{} x-distance:{}",
-                            conflictingVoice.getId(),
-                            candidateStart,
-                            bestXDistance);
-
-                    logger.warn(
-                            "    candidate first chord id:{} x:{} duration:{}",
-                            firstChord.getId(),
-                            firstChord.getCenter().x,
-                            firstChord.getDuration());
-                            
-                    logger.warn(
-                            "    conflicting chord id:{} x:{} duration:{}",
-                            conflictingChord.getId(),
-                            conflictingChord.getCenter().x,
-                            conflictingChord.getDuration());
-
-                    //
-                    // Print the complete suspicious voice so we can inspect it.
-                    //
-                    for (AbstractChordInter chord : candidate.getChords()) {
-
-                        Rational start = chord.getTimeOffset();
-                        Rational end = null;
-
-                        try {
-                            end = chord.getEndTime();
-                        } catch (Exception ex) {
-                            // Diagnostic only.
-                        }
-
-                        logger.warn(
-                                "        candidate chord id:{} x:{}"
-                                        + " start:{} duration:{} end:{}",
-                                chord.getId(),
-                                chord.getCenter().x,
-                                start,
-                                chord.getDuration(),
-                                end);
-                    }
-
-                    issues++;
-                }
+                issues++;
             }
 
             partIndex++;
@@ -513,7 +447,6 @@ public class ReasoningAnalyzer
 
         return issues;
     }
-
 
     /**
      * Estimate the effective duration of one part-measure.
@@ -893,5 +826,18 @@ public class ReasoningAnalyzer
     private boolean hasTemporaryOverlappingVoice (Measure measure)
     {
         return findTemporaryOverlappingVoice(measure) != null;
+    }
+
+    private boolean hasUnresolvedChordTiming (Measure measure)
+    {
+        for (Voice voice : measure.getVoices()) {
+            for (AbstractChordInter chord : voice.getChords()) {
+                if (chord.getTimeOffset() == null) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }
