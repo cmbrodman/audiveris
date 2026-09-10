@@ -43,7 +43,7 @@ public class ReasoningAnalyzer
     /** Page being analyzed. */
     private final Page page;
 
-    private static class TemporaryOverlapMatch
+    private static class TemporaryVoiceOverlap
     {
         final Voice candidateVoice;
         final AbstractChordInter candidateChord;
@@ -51,7 +51,7 @@ public class ReasoningAnalyzer
         final AbstractChordInter conflictingChord;
         final int xDistance;
 
-        TemporaryOverlapMatch (Voice candidateVoice,
+        TemporaryVoiceOverlap (Voice candidateVoice,
                             AbstractChordInter candidateChord,
                             Voice conflictingVoice,
                             AbstractChordInter conflictingChord,
@@ -65,9 +65,9 @@ public class ReasoningAnalyzer
         }
     }
 
-    private List<TemporaryOverlapMatch> findTemporaryOverlappingVoices (Measure measure)
+    private List<TemporaryVoiceOverlap> findTemporaryVoiceOverlaps (Measure measure)
 {
-    final List<TemporaryOverlapMatch> matches = new ArrayList<>();
+    final List<TemporaryVoiceOverlap> matches = new ArrayList<>();
 
     for (Voice candidate : measure.getVoices()) {
 
@@ -139,7 +139,7 @@ public class ReasoningAnalyzer
 
         if (conflictingChord != null) {
             matches.add(
-                    new TemporaryOverlapMatch(
+                    new TemporaryVoiceOverlap(
                             candidate,
                             firstChord,
                             conflictingVoice,
@@ -249,7 +249,7 @@ public class ReasoningAnalyzer
             }
         }
         issues += compareMeasures(stack);
-        issues += detectTemporaryOverlappingVoices(stack);
+        issues += reportTemporaryVoiceOverlaps(stack);
 
         // Experimental evidence scoring
         reportEvidenceScores(stack);
@@ -366,17 +366,17 @@ public class ReasoningAnalyzer
      * @param stack measure stack
      * @return number of suspicious temporary voices found
      */
-    private int detectTemporaryOverlappingVoices (MeasureStack stack)
+    private int reportTemporaryVoiceOverlaps (MeasureStack stack)
     {
         int issues = 0;
         int partIndex = 1;
 
         for (Measure measure : stack.getMeasures()) {
 
-            final List<TemporaryOverlapMatch> matches =
-                    findTemporaryOverlappingVoices(measure);
+            final List<TemporaryVoiceOverlap> matches =
+                    findTemporaryVoiceOverlaps(measure);
 
-            for (TemporaryOverlapMatch match : matches) {
+            for (TemporaryVoiceOverlap match : matches) {
 
                 final Voice candidate = match.candidateVoice;
                 final AbstractChordInter firstChord = match.candidateChord;
@@ -388,11 +388,13 @@ public class ReasoningAnalyzer
                         firstChord.getTimeOffset();
 
                 logger.warn(
-                        "REASONING: System {} Measure {} Part {}"
-                                + " has TEMPORARY_OVERLAPPING_VOICE",
+                        "REASONING: System {} Measure {} Part {} has {}",
                         stack.getSystem().getId(),
                         stack.getPageId(),
-                        partIndex);
+                        partIndex,
+                        firstChord.getDuration().equals(conflictingChord.getDuration())
+                                ? "ALIGNED_TEMPORARY_VOICE"
+                                : "CONFLICTING_DURATION_OVERLAP");
 
                 logger.warn(
                         "    suspicious Voice {} starts:{} chords:{}",
@@ -417,6 +419,13 @@ public class ReasoningAnalyzer
                         conflictingChord.getId(),
                         conflictingChord.getCenter().x,
                         conflictingChord.getDuration());
+
+                final boolean sameDuration =
+                        firstChord.getDuration().equals(conflictingChord.getDuration());
+
+                logger.warn(
+                        "    duration relation:{}",
+                        sameDuration ? "SAME_DURATION" : "DIFFERENT_DURATION");
 
                 //
                 // Print the complete suspicious voice so we can inspect it.
@@ -643,7 +652,7 @@ public class ReasoningAnalyzer
             boolean underfull = false;
             boolean overfull = false;
             boolean alignedPartIsCorrect = false;
-            boolean temporaryOverlap = false;
+            boolean conflictingDurationOverlap = false;
             boolean unresolvedTiming = false;
             boolean missingContent = false;
 
@@ -697,11 +706,11 @@ public class ReasoningAnalyzer
             }
 
             //
-            // Temporary overlapping voice
+            // Conflicting-duration overlap
             //
-            temporaryOverlap = hasTemporaryOverlappingVoice(measure);
+            conflictingDurationOverlap = hasConflictingDurationOverlap(measure);
 
-            if (temporaryOverlap) {
+            if (conflictingDurationOverlap) {
                 score += 2;
             }
 
@@ -747,8 +756,8 @@ public class ReasoningAnalyzer
                     logger.warn("    +3 ALIGNED_PART_HAS_CORRECT_DURATION");
                 }
 
-                if (temporaryOverlap) {
-                    logger.warn("    +2 TEMPORARY_OVERLAPPING_VOICE");
+                if (conflictingDurationOverlap) {
+                    logger.warn("    +2 CONFLICTING_DURATION_OVERLAP");
                 }
 
                 if (voiceCountDisagreement) {
@@ -821,14 +830,14 @@ public class ReasoningAnalyzer
      * already established voice.
      *
      * The matching chord is selected using horizontal proximity, just as
-     * in detectTemporaryOverlappingVoices().
+     * in reportTemporaryVoiceOverlaps().
      *
      * @param measure part-measure
      * @return true if such a voice exists
      */
-    private boolean hasTemporaryOverlappingVoice (Measure measure)
+    private boolean hasTemporaryVoiceOverlap (Measure measure)
     {
-        return !findTemporaryOverlappingVoices(measure).isEmpty();
+        return !findTemporaryVoiceOverlaps(measure).isEmpty();
     }
 
     private boolean hasUnresolvedChordTiming (Measure measure)
@@ -838,6 +847,20 @@ public class ReasoningAnalyzer
                 if (chord.getTimeOffset() == null) {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean hasConflictingDurationOverlap (Measure measure)
+    {
+        for (TemporaryVoiceOverlap match
+                : findTemporaryVoiceOverlaps(measure)) {
+
+            if (!match.candidateChord.getDuration().equals(
+                    match.conflictingChord.getDuration())) {
+                return true;
             }
         }
 
