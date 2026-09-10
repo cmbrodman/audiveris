@@ -18,6 +18,9 @@ import org.audiveris.omr.sheet.rhythm.Voice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Experimental read-only musical reasoning pass.
  *
@@ -62,91 +65,91 @@ public class ReasoningAnalyzer
         }
     }
 
-    private TemporaryOverlapMatch findTemporaryOverlappingVoice (Measure measure)
-    {
-        for (Voice candidate : measure.getVoices()) {
+    private List<TemporaryOverlapMatch> findTemporaryOverlappingVoices (Measure measure)
+{
+    final List<TemporaryOverlapMatch> matches = new ArrayList<>();
 
-            // Only examine short-lived voices.
-            if (candidate.getChords().size() > 2) {
+    for (Voice candidate : measure.getVoices()) {
+
+        if (candidate.getChords().size() > 2) {
+            continue;
+        }
+
+        final AbstractChordInter firstChord = candidate.getFirstChord();
+
+        if (firstChord == null) {
+            continue;
+        }
+
+        final Rational candidateStart = firstChord.getTimeOffset();
+
+        if (candidateStart == null) {
+            continue;
+        }
+
+        if (candidateStart.compareTo(Rational.ZERO) <= 0) {
+            continue;
+        }
+
+        Voice conflictingVoice = null;
+        AbstractChordInter conflictingChord = null;
+        int bestXDistance = Integer.MAX_VALUE;
+
+        for (Voice other : measure.getVoices()) {
+
+            if (other == candidate) {
                 continue;
             }
 
-            final AbstractChordInter firstChord = candidate.getFirstChord();
+            final AbstractChordInter otherFirst = other.getFirstChord();
 
-            if (firstChord == null) {
+            if (otherFirst == null) {
                 continue;
             }
 
-            final Rational candidateStart = firstChord.getTimeOffset();
+            final Rational otherStart = otherFirst.getTimeOffset();
 
-            if (candidateStart == null) {
+            if (otherStart == null) {
                 continue;
             }
 
-            // Ignore voices that begin at the start of the measure.
-            if (candidateStart.compareTo(Rational.ZERO) <= 0) {
+            if (otherStart.compareTo(candidateStart) >= 0) {
                 continue;
             }
 
-            Voice conflictingVoice = null;
-            AbstractChordInter conflictingChord = null;
-            int bestXDistance = Integer.MAX_VALUE;
+            for (AbstractChordInter chord : other.getChords()) {
 
-            for (Voice other : measure.getVoices()) {
+                final Rational chordStart = chord.getTimeOffset();
 
-                if (other == candidate) {
-                    continue;
-                }
+                if ((chordStart != null)
+                        && chordStart.equals(candidateStart)) {
 
-                final AbstractChordInter otherFirst = other.getFirstChord();
+                    final int xDistance = Math.abs(
+                            chord.getCenter().x
+                                    - firstChord.getCenter().x);
 
-                if (otherFirst == null) {
-                    continue;
-                }
-
-                final Rational otherStart = otherFirst.getTimeOffset();
-
-                if (otherStart == null) {
-                    continue;
-                }
-
-                // The other voice must already have started.
-                if (otherStart.compareTo(candidateStart) >= 0) {
-                    continue;
-                }
-
-                for (AbstractChordInter chord : other.getChords()) {
-
-                    final Rational chordStart = chord.getTimeOffset();
-
-                    if ((chordStart != null)
-                            && chordStart.equals(candidateStart)) {
-
-                        final int xDistance = Math.abs(
-                                chord.getCenter().x
-                                        - firstChord.getCenter().x);
-
-                        if (xDistance < bestXDistance) {
-                            bestXDistance = xDistance;
-                            conflictingVoice = other;
-                            conflictingChord = chord;
-                        }
+                    if (xDistance < bestXDistance) {
+                        bestXDistance = xDistance;
+                        conflictingVoice = other;
+                        conflictingChord = chord;
                     }
                 }
             }
-
-            if (conflictingChord != null) {
-                return new TemporaryOverlapMatch(
-                        candidate,
-                        firstChord,
-                        conflictingVoice,
-                        conflictingChord,
-                        bestXDistance);
-            }
         }
 
-        return null;
+        if (conflictingChord != null) {
+            matches.add(
+                    new TemporaryOverlapMatch(
+                            candidate,
+                            firstChord,
+                            conflictingVoice,
+                            conflictingChord,
+                            bestXDistance));
+        }
     }
+
+    return matches;
+}
 
     /**
      * Create an analyzer for one page.
@@ -370,10 +373,10 @@ public class ReasoningAnalyzer
 
         for (Measure measure : stack.getMeasures()) {
 
-            final TemporaryOverlapMatch match =
-                    findTemporaryOverlappingVoice(measure);
+            final List<TemporaryOverlapMatch> matches =
+                    findTemporaryOverlappingVoices(measure);
 
-            if (match != null) {
+            for (TemporaryOverlapMatch match : matches) {
 
                 final Voice candidate = match.candidateVoice;
                 final AbstractChordInter firstChord = match.candidateChord;
@@ -825,7 +828,7 @@ public class ReasoningAnalyzer
      */
     private boolean hasTemporaryOverlappingVoice (Measure measure)
     {
-        return findTemporaryOverlappingVoice(measure) != null;
+        return !findTemporaryOverlappingVoices(measure).isEmpty();
     }
 
     private boolean hasUnresolvedChordTiming (Measure measure)
