@@ -368,6 +368,28 @@ public class SIGraph
     public void deleteInters (Collection<? extends Inter> inters)
     {
         for (Inter inter : inters) {
+
+            final Point center = inter.getCenter();
+
+            if ((system.getId() == 1)
+                    && (center != null)
+                    && (center.x >= 390)
+                    && (center.x <= 425)
+                    && (center.y >= 285)
+                    && (center.y <= 360)
+                    && ((inter instanceof HeadInter)
+                            || (inter instanceof StemInter))) {
+
+                logger.warn(
+                        "WATCH ACTUAL DELETE: {} id:{} center:{}"
+                                + " grade:{} contextual:{}",
+                        inter.getClass().getSimpleName(),
+                        inter.getId(),
+                        center,
+                        inter.getGrade(),
+                        inter.getContextualGrade());
+            }
+
             inter.remove();
         }
     }
@@ -385,6 +407,27 @@ public class SIGraph
     {
         Set<Inter> removed = new LinkedHashSet<>();
 
+        if (system.getId() == 1) {
+
+            final Rectangle watchBox =
+                    new Rectangle(350, 240, 150, 160);
+        
+            logger.warn("========== LOCAL WATCH AROUND 4127 ==========");
+        
+            for (Inter nearby : containedInters(watchBox)) {
+        
+                logger.warn(
+                        "LOCAL INTER: {} id:{} center:{} grade:{} contextual:{}",
+                        nearby.getClass().getSimpleName(),
+                        nearby.getId(),
+                        nearby.getCenter(),
+                        nearby.getGrade(),
+                        nearby.getContextualGrade());
+            }
+        
+            logger.warn("=============================================");
+        }
+
         for (Inter inter : vertexSet()) {
             // Skip frozen inters
             if (inter.isFrozen()) {
@@ -397,10 +440,26 @@ public class SIGraph
             }
 
             if (inter.getContextualGrade() < Grades.minContextualGrade) {
+
+                if (((inter instanceof HeadInter) || (inter instanceof StemInter))
+                        && (system.getId() == 1)) {
+                
+                    logger.warn(
+                            "REDUCTION DELETE: System {} {} id:{} center:{}"
+                                    + " grade:{} contextual:{} threshold:{}",
+                            system.getId(),
+                            inter.getClass().getSimpleName(),
+                            inter.getId(),
+                            inter.getCenter(),
+                            inter.getGrade(),
+                            inter.getContextualGrade(),
+                            Grades.minContextualGrade);
+                }
+            
                 if (inter.isVip()) {
                     logger.info("VIP deleted weak {}", inter);
                 }
-
+            
                 removed.add(inter);
             }
         }

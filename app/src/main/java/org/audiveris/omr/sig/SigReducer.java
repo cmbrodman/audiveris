@@ -759,10 +759,36 @@ public class SigReducer
             }
 
             // Check if the head has a stem relation
+//            if (!headHasStem(head)) {
+//                head.remove();
+//                modifs++;
+//
+//                continue;
+//            }
+
             if (!headHasStem(head)) {
+
+                final Point center = head.getCenter();
+
+                if ((system.getId() == 1)
+                        && (center != null)
+                        && (center.x >= 390)
+                        && (center.x <= 425)
+                        && (center.y >= 285)
+                        && (center.y <= 360)) {
+
+                    logger.warn(
+                            "WATCH CHECKHEADS NO STEM: {} id:{} center:{}"
+                                    + " grade:{} contextual:{}",
+                            head.getClass().getSimpleName(),
+                            head.getId(),
+                            center,
+                            head.getGrade(),
+                            head.getContextualGrade());
+                }
+
                 head.remove();
                 modifs++;
-
                 continue;
             }
 
@@ -1166,6 +1192,25 @@ public class SigReducer
         for (Inter inter : stems) {
             final StemInter stem = (StemInter) inter;
 
+            final Point center = stem.getCenter();
+            final boolean watchedStem =
+                    (system.getId() == 1)
+                    && (center != null)
+                    && (center.x >= 390)
+                    && (center.x <= 425)
+                    && (center.y >= 285)
+                    && (center.y <= 360);
+
+            if (watchedStem) {
+                logger.warn(
+                        "WATCH CHECKSTEMS START: id:{} center:{} grade:{} contextual:{} heads:{}",
+                        stem.getId(),
+                        center,
+                        stem.getGrade(),
+                        stem.getContextualGrade(),
+                        stem.getHeads().size());
+            }
+
             // Cut links to ending heads on wrong stem side
             if (pruneStemHeads(stem)) {
                 modifs++;
@@ -1193,11 +1238,39 @@ public class SigReducer
         for (Inter inter : stems) {
             final StemInter stem = (StemInter) inter;
 
+            final Point center = stem.getCenter();
+
+            final boolean watchedStem =
+                    (system.getId() == 1)
+                    && (center != null)
+                    && (center.x >= 390)
+                    && (center.x <= 425)
+                    && (center.y >= 285)
+                    && (center.y <= 360);
+
+            if (watchedStem) {
+                logger.warn(
+                        "WATCH CHECKSTEMS START: id:{} center:{} grade:{} contextual:{} heads:{}",
+                        stem.getId(),
+                        center,
+                        stem.getGrade(),
+                        stem.getContextualGrade(),
+                        stem.getHeads().size());
+            }
+
             if (stem.isVip()) {
                 logger.info("VIP checkStem {}", stem);
             }
 
             if (stem.getHeads().isEmpty()) {
+
+                if (watchedStem) {
+                    logger.warn(
+                            "WATCH CHECKSTEMS DELETE NO HEADS: id:{} center:{}",
+                            stem.getId(),
+                            center);
+                }
+
                 if (stem.isVip()) {
                     logger.info("VIP deleting stem lacking heads {}", stem);
                 }
@@ -1220,7 +1293,19 @@ public class SigReducer
             //                continue;
             //            }
             //
-            if (!stemHasSingleHeadEnd(stem)) {
+
+            final boolean singleHeadEnd = stemHasSingleHeadEnd(stem);
+
+            if (watchedStem) {
+                logger.warn(
+                        "WATCH CHECKSTEMS AFTER SINGLEHEAD: id:{} result:{} heads:{} removed:{}",
+                        stem.getId(),
+                        singleHeadEnd,
+                        stem.getHeads().size(),
+                        stem.isRemoved());
+            }
+
+            if (!singleHeadEnd) {
                 modifs++;
             }
         }

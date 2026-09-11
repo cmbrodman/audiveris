@@ -142,9 +142,19 @@ public class ReductionStep
     //----------//
     @Override
     public void doSystem (SystemInfo system,
-                          Void context)
+                        Void context)
         throws StepException
     {
+        // EXPERIMENT:
+        // Refine stem head ends BEFORE reduction so stem direction
+        // is evaluated using the notehead-based endpoint.
+        if (constants.refineStemHeadEnd.isSet()) {
+            for (Inter s : system.getSig().inters(StemInter.class)) {
+                final StemInter stem = (StemInter) s;
+                stem.refineHeadEnd();
+            }
+        }
+
         new SigReducer(system, true).reduceFoundations();
 
         if (constants.refineStemHeadEnd.isSet()) {
@@ -152,14 +162,6 @@ public class ReductionStep
             for (Inter s : system.getSig().inters(StemInter.class)) {
                 final StemInter stem = (StemInter) s;
                 stem.refineHeadEnd();
-            }
-        }
-
-        if (constants.refineStemTailEnd.isSet()) {
-            // Refine precise stem tail end, based on last beam if any
-            for (Inter s : system.getSig().inters(StemInter.class)) {
-                final StemInter stem = (StemInter) s;
-                stem.refineTailEnd();
             }
         }
     }

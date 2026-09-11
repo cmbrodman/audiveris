@@ -324,6 +324,64 @@ public class StemInter
             }
         }
 
+        final Point center = getCenter();
+
+        if ((sig.getSystem().getId() == 1)
+                && (center != null)
+                && (center.x >= 390)
+                && (center.x <= 425)
+                && (center.y >= 285)
+                && (center.y <= 360)) {
+
+            logger.warn(
+                    "WATCH COMPUTE DIRECTION FAILED: stem:{} center:{} links:{}",
+                    getId(),
+                    center,
+                    links.size());
+
+            for (Relation rel : links) {
+                final Inter source = sig.getEdgeSource(rel);
+
+                logger.warn(
+                        "WATCH STEM LINK: stem:{} source:{} id:{} relation:{}",
+                        getId(),
+                        source.getClass().getSimpleName(),
+                        source.getId(),
+                        rel.getClass().getSimpleName());
+
+                if (rel instanceof HeadStemRelation link) {
+                    final StemPortion portion =
+                            link.getStemPortion(source, stemLine, scale);
+
+                    logger.warn(
+                            "WATCH HEAD LINK: stem:{} head:{} portion:{} side:{} shape:{}",
+                            getId(),
+                            source.getId(),
+                            portion,
+                            link.getHeadSide(),
+                            source.getShape());
+                } else if (rel instanceof BeamStemRelation link) {
+                    final StemPortion portion =
+                            link.getStemPortion(source, stemLine, scale);
+
+                    logger.warn(
+                            "WATCH BEAM LINK: stem:{} beam:{} portion:{}",
+                            getId(),
+                            source.getId(),
+                            portion);
+                } else if (rel instanceof FlagStemRelation link) {
+                    final StemPortion portion =
+                            link.getStemPortion(source, stemLine, scale);
+
+                    logger.warn(
+                            "WATCH FLAG LINK: stem:{} flag:{} portion:{}",
+                            getId(),
+                            source.getId(),
+                            portion);
+                }
+            }
+        }
+
         return 0; // Cannot decide with current config!
     }
 

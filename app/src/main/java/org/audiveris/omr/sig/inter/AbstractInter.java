@@ -1267,6 +1267,35 @@ public abstract class AbstractInter
             return;
         }
 
+        final Point center = getCenter();
+
+        if ((sig != null)
+                && (sig.getSystem().getId() == 1)
+                && (center != null)
+                && (center.x >= 390)
+                && (center.x <= 425)
+                && (center.y >= 285)
+                && (center.y <= 360)
+                && ((this instanceof HeadInter)
+                        || (this instanceof StemInter))) {
+
+            logger.warn(
+                    "WATCH REMOVE: {} id:{} center:{}"
+                            + " grade:{} contextual:{} extensive:{}",
+                    getClass().getSimpleName(),
+                    getId(),
+                    center,
+                    getGrade(),
+                    getContextualGrade(),
+                    extensive);
+
+            StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+
+            for (int i = 2; i < Math.min(stack.length, 8); i++) {
+                logger.warn("WATCH CALLER {}: {}", i, stack[i]);
+            }
+        }
+
         logger.debug("Removing {} extensive:{}", this, extensive);
 
         if (isVip()) {
