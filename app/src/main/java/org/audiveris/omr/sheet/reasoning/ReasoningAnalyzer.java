@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.audiveris.omr.sheet.Staff;
 
 /**
  * Experimental read-only musical reasoning pass.
@@ -39,6 +40,8 @@ public class ReasoningAnalyzer
      * Later this will become a user preference.
      */
     private static final boolean STRICT_UNDERFULL_CHECK = true;
+
+    private static final boolean USE_STEM_DIRECTION_GROUPING = false;
 
     /** Page being analyzed. */
     private final Page page;
@@ -66,90 +69,90 @@ public class ReasoningAnalyzer
     }
 
     private List<TemporaryVoiceOverlap> findTemporaryVoiceOverlaps (Measure measure)
-{
-    final List<TemporaryVoiceOverlap> matches = new ArrayList<>();
+    {
+        final List<TemporaryVoiceOverlap> matches = new ArrayList<>();
 
-    for (Voice candidate : measure.getVoices()) {
+        for (Voice candidate : measure.getVoices()) {
 
-        if (candidate.getChords().size() > 2) {
-            continue;
-        }
-
-        final AbstractChordInter firstChord = candidate.getFirstChord();
-
-        if (firstChord == null) {
-            continue;
-        }
-
-        final Rational candidateStart = firstChord.getTimeOffset();
-
-        if (candidateStart == null) {
-            continue;
-        }
-
-        if (candidateStart.compareTo(Rational.ZERO) <= 0) {
-            continue;
-        }
-
-        Voice conflictingVoice = null;
-        AbstractChordInter conflictingChord = null;
-        int bestXDistance = Integer.MAX_VALUE;
-
-        for (Voice other : measure.getVoices()) {
-
-            if (other == candidate) {
+            if (candidate.getChords().size() > 2) {
                 continue;
             }
 
-            final AbstractChordInter otherFirst = other.getFirstChord();
+            final AbstractChordInter firstChord = candidate.getFirstChord();
 
-            if (otherFirst == null) {
+            if (firstChord == null) {
                 continue;
             }
 
-            final Rational otherStart = otherFirst.getTimeOffset();
+            final Rational candidateStart = firstChord.getTimeOffset();
 
-            if (otherStart == null) {
+            if (candidateStart == null) {
                 continue;
             }
 
-            if (otherStart.compareTo(candidateStart) >= 0) {
+            if (candidateStart.compareTo(Rational.ZERO) <= 0) {
                 continue;
             }
 
-            for (AbstractChordInter chord : other.getChords()) {
+            Voice conflictingVoice = null;
+            AbstractChordInter conflictingChord = null;
+            int bestXDistance = Integer.MAX_VALUE;
 
-                final Rational chordStart = chord.getTimeOffset();
+            for (Voice other : measure.getVoices()) {
 
-                if ((chordStart != null)
-                        && chordStart.equals(candidateStart)) {
+                if (other == candidate) {
+                    continue;
+                }
 
-                    final int xDistance = Math.abs(
-                            chord.getCenter().x
-                                    - firstChord.getCenter().x);
+                final AbstractChordInter otherFirst = other.getFirstChord();
 
-                    if (xDistance < bestXDistance) {
-                        bestXDistance = xDistance;
-                        conflictingVoice = other;
-                        conflictingChord = chord;
+                if (otherFirst == null) {
+                    continue;
+                }
+
+                final Rational otherStart = otherFirst.getTimeOffset();
+
+                if (otherStart == null) {
+                    continue;
+                }
+
+                if (otherStart.compareTo(candidateStart) >= 0) {
+                    continue;
+                }
+
+                for (AbstractChordInter chord : other.getChords()) {
+
+                    final Rational chordStart = chord.getTimeOffset();
+
+                    if ((chordStart != null)
+                            && chordStart.equals(candidateStart)) {
+
+                        final int xDistance = Math.abs(
+                                chord.getCenter().x
+                                        - firstChord.getCenter().x);
+
+                        if (xDistance < bestXDistance) {
+                            bestXDistance = xDistance;
+                            conflictingVoice = other;
+                            conflictingChord = chord;
+                        }
                     }
                 }
             }
+
+            if (conflictingChord != null) {
+                matches.add(
+                        new TemporaryVoiceOverlap(
+                                candidate,
+                                firstChord,
+                                conflictingVoice,
+                                conflictingChord,
+                                bestXDistance));
+            }
         }
 
-        if (conflictingChord != null) {
-            matches.add(
-                    new TemporaryVoiceOverlap(
-                            candidate,
-                            firstChord,
-                            conflictingVoice,
-                            conflictingChord,
-                            bestXDistance));
-        }
+        return matches;
     }
-
-    return matches;
-}
 
     /**
      * Create an analyzer for one page.
@@ -196,6 +199,12 @@ public class ReasoningAnalyzer
         if (expected == null) {
             return 0;
         }
+
+        logger.warn("");
+        logger.warn(
+                "==================== System {} Measure {} ====================",
+                stack.getSystem().getId(),
+                stack.getPageId());
 
         int issues = 0;
 
@@ -253,6 +262,14 @@ public class ReasoningAnalyzer
 
         // Experimental evidence scoring
         reportEvidenceScores(stack);
+
+        // Observation-only stem-direction analysis
+        reportStaffTexture(stack);
+
+        // Observation-only staff/part structure check
+        reportStaffMap(stack);
+
+        reportReasoningVoiceMap(stack);
 
         return issues;
     }
@@ -865,5 +882,151 @@ public class ReasoningAnalyzer
         }
 
         return false;
+    }
+
+    private void reportStaffTexture (MeasureStack stack)
+    {
+        int measureIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            int stemUp = 0;
+            int stemDown = 0;
+            int stemUnknown = 0;
+
+            for (Voice voice : measure.getVoices()) {
+                for (AbstractChordInter chord : voice.getChords()) {
+
+                    if (chord.getStem() == null) {
+                        stemUnknown++;
+                        continue;
+                    }
+
+                    final int stemDir = chord.getStemDir();
+
+                    if (stemDir < 0) {
+                        stemUp++;
+                    } else if (stemDir > 0) {
+                        stemDown++;
+                    } else {
+                        stemUnknown++;
+                    }
+                }
+            }
+
+            logger.warn(
+                    "STAFF TEXTURE: System {} Measure {} Part {}"
+                            + " stem-up:{} stem-down:{} unknown:{}",
+                    stack.getSystem().getId(),
+                    stack.getPageId(),
+                    measureIndex,
+                    stemUp,
+                    stemDown,
+                    stemUnknown);
+
+            measureIndex++;
+        }
+    }
+
+    private int getExpectedVoiceId (MeasureStack stack,
+                                    AbstractChordInter chord)
+    {
+    if (chord.getTopStaff() == null) {
+    return 0;
+    }
+
+    final int staffIndex =
+    stack.getSystem().getStaves().indexOf(chord.getTopStaff());
+
+    final int stemDir = chord.getStemDir();
+
+    if (stemDir == 0) {
+    return 0;
+    }
+
+    if (staffIndex == 0) {
+    return (stemDir < 0) ? 1 : 2;
+    }
+
+    if (staffIndex == 1) {
+    return (stemDir < 0) ? 3 : 4;
+    }
+
+    return 0;
+    }
+
+    private void reportReasoningVoiceMap (MeasureStack stack)
+    {
+        int partIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            for (Voice voice : measure.getVoices()) {
+
+                for (AbstractChordInter chord : voice.getChords()) {
+
+                    final int expectedVoiceId = getExpectedVoiceId(stack, chord);
+
+                    // 0 means we cannot confidently apply the rule.
+                    if (expectedVoiceId == 0) {
+                        continue;
+                    }
+
+                    final int actualVoiceId = voice.getId();
+
+                    final int staffIndex =
+                            stack.getSystem().getStaves().indexOf(chord.getTopStaff());
+
+                    final String staffName =
+                            (staffIndex == 0) ? "UPPER" : "LOWER";
+
+                    final String stemName =
+                            (chord.getStemDir() < 0) ? "UP" : "DOWN";
+
+                    logger.warn(
+                            "REASONING VOICE MAP: Part {} Staff {}"
+                                    + " chord:{} x:{} stem:{}"
+                                    + " audiveris-voice:{} reasoning-voice:{}",
+                            partIndex,
+                            staffName,
+                            chord.getId(),
+                            chord.getCenter().x,
+                            stemName,
+                            actualVoiceId,
+                            expectedVoiceId);
+                    }
+            }
+
+            partIndex++;
+        }
+    }
+
+    private void reportStaffMap (MeasureStack stack)
+    {
+        int partIndex = 1;
+
+        for (Measure measure : stack.getMeasures()) {
+
+            if (measure.getPart() != null) {
+
+                logger.warn(
+                        "STAFF MAP: Part {}",
+                        partIndex);
+
+                for (Staff staff : measure.getPart().getStaves()) {
+
+                    final int systemStaffIndex =
+                            stack.getSystem().getStaves().indexOf(staff);
+
+                    logger.warn(
+                            "    staff-id:{} index-in-part:{} index-in-system:{}",
+                            staff.getId(),
+                            staff.getIndexInPart(),
+                            systemStaffIndex);
+                }
+            }
+
+            partIndex++;
+        }
     }
 }
